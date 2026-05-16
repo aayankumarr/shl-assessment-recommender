@@ -7,7 +7,7 @@ from google.genai import types
 from groq import Groq
 from pydantic import BaseModel
 
-from retrieval import load_index, retrieve
+from retrieval import load_index, retrieve_multi
 
 
 class Message(BaseModel):
@@ -28,6 +28,7 @@ class AgentState(BaseModel):
     history: list[Message]
     intent: str = ""
     rewritten_query: str = ""
+    expanded_queries: list[str] = []
     candidates: list[dict] = []
     reply: str = ""
     recommendations: list[dict] = []
@@ -185,9 +186,34 @@ Do NOT include filler words. Output the query string only."""
     return state
 
 
+def expand_query(state: AgentState) -> AgentState:
+    prompt = f"""You are a search query optimizer for SHL psychometric assessments.
+
+Primary query: {state.rewritten_query}
+
+Generate 2-3 alternative phrasings of this query that approach the same need using different vocabulary.
+Vary: job role terms, assessment type terms, seniority language.
+Each phrasing must be under 20 words. Do NOT change the underlying intent.
+
+Output a JSON array of strings only."""
+
+    result = _call_llm(
+        prompt,
+        gemini_schema={"type": "ARRAY", "items": {"type": "STRING"}},
+        groq_key="queries"
+    )
+
+    if isinstance(result, list):
+        state.expanded_queries = [q for q in result if isinstance(q, str)][:3]
+    else:
+        state.expanded_queries = []
+    return state
+
+
 def run_retrieval(state: AgentState) -> AgentState:
-    candidates = retrieve(
-        query=state.rewritten_query,
+    all_queries = [state.rewritten_query] + state.expanded_queries
+    state.candidates = retrieve_multi(
+        queries=all_queries,
         top_k=10,
         index=_index,
         metadata=_metadata,
@@ -195,7 +221,6 @@ def run_retrieval(state: AgentState) -> AgentState:
         bi_encoder=_bi_encoder,
         cross_encoder=_cross_encoder,
     )
-    state.candidates = candidates
     return state
 
 
@@ -473,6 +498,8 @@ def run_agent(history: list[dict]) -> dict:
     else:
         # recommend / refine — need retrieval first
         state = rewrite_query(state)
+        if state.intent == "recommend":
+            state = expand_query(state)
         state = run_retrieval(state)
         state = reflect_and_retry(state)
         if state.intent == "recommend":

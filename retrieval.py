@@ -92,35 +92,29 @@ def load_index():
 
 
 
-def retrieve(query: str, top_k: int = RERANK_TOP_N,
-             index=None, metadata=None, bm25=None,
-             bi_encoder=None, cross_encoder=None) -> list[dict]:
-
-    # ── BM25 Search ───────────────────────────────────────────────
+def _get_candidates(query: str, index, bm25, bi_encoder) -> list[tuple]:
+    """BM25 + FAISS + RRF — returns (idx, rrf_score) pairs without cross-encoder."""
     query_tokens = query.lower().split()
     bm25_scores  = bm25.get_scores(query_tokens)
     bm25_top     = np.argsort(bm25_scores)[::-1][:BM25_TOP_K]
 
-    # ── FAISS Search ──────────────────────────────────────────────
     query_vector = bi_encoder.encode([query], convert_to_numpy=True)
     faiss.normalize_L2(query_vector)
     _, faiss_indices = index.search(query_vector, SEMANTIC_TOP_K)
     faiss_top = faiss_indices[0]
 
-    # ── RRF Fusion ────────────────────────────────────────────────
     rrf_scores = {}
-
     for rank, idx in enumerate(faiss_top):
         rrf_scores[idx] = rrf_scores.get(idx, 0) + 1 / (rank + RRF_K)
-
     for rank, idx in enumerate(bm25_top):
         rrf_scores[idx] = rrf_scores.get(idx, 0) + 1 / (rank + RRF_K)
 
-    merged = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
-    merged = merged[:20]
+    return sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:20]
 
-    # ── Cross-Encoder Reranking ───────────────────────────────────
-    pairs = [(query, metadata[idx]["search_text"]) for idx, _ in merged]
+
+def _rerank(primary_query: str, merged: list[tuple], metadata, cross_encoder, top_k: int) -> list[dict]:
+    """Cross-encoder rerank a merged candidate list using the primary query."""
+    pairs     = [(primary_query, metadata[idx]["search_text"]) for idx, _ in merged]
     ce_scores = cross_encoder.predict(pairs)
 
     reranked = sorted(
@@ -129,7 +123,6 @@ def retrieve(query: str, top_k: int = RERANK_TOP_N,
         reverse=True
     )
 
-    # ── Build Results ─────────────────────────────────────────────
     results = []
     for score, idx in reranked[:top_k]:
         item = metadata[idx]
@@ -140,8 +133,32 @@ def retrieve(query: str, top_k: int = RERANK_TOP_N,
             "test_type_labels": item["test_type_labels"],
             "score":            float(score),
         })
-
     return results
+
+
+def retrieve(query: str, top_k: int = RERANK_TOP_N,
+             index=None, metadata=None, bm25=None,
+             bi_encoder=None, cross_encoder=None) -> list[dict]:
+    merged = _get_candidates(query, index, bm25, bi_encoder)
+    return _rerank(query, merged, metadata, cross_encoder, top_k)
+
+
+def retrieve_multi(queries: list[str], top_k: int = RERANK_TOP_N,
+                   index=None, metadata=None, bm25=None,
+                   bi_encoder=None, cross_encoder=None) -> list[dict]:
+    """Multi-query retrieval: merge candidate pools from all queries, rerank once."""
+    all_ranked = [_get_candidates(q, index, bm25, bi_encoder) for q in queries]
+
+    # Second RRF pass across all per-query result lists
+    merged_scores: dict[int, float] = {}
+    for ranked in all_ranked:
+        for rank, (idx, _) in enumerate(ranked):
+            merged_scores[idx] = merged_scores.get(idx, 0) + 1 / (rank + RRF_K)
+
+    merged = sorted(merged_scores.items(), key=lambda x: x[1], reverse=True)[:20]
+
+    # Rerank once using the primary query (first in list)
+    return _rerank(queries[0], merged, metadata, cross_encoder, top_k)
 
 
 

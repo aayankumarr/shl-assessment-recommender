@@ -119,7 +119,7 @@ def extract_competencies(text: str) -> list[str]:
 
 # ── search_text builder ────────────────────────────────────────────────────────
 
-def build_search_text(a: dict) -> str:
+def build_search_text(a: dict, llm_desc: str = "") -> str:
     """
     Combine all useful fields into one rich text string for embedding.
 
@@ -186,6 +186,10 @@ def build_search_text(a: dict) -> str:
     if a.get("remote_testing"):
         parts.append("Supports remote testing")
 
+    # LLM-generated recruiter-language use-case description
+    if llm_desc:
+        parts.append(f"Use case: {llm_desc}")
+
     return "\n".join(parts)
 
 
@@ -198,6 +202,14 @@ def main():
     print(f"Reading {input_path}...")
     with open(input_path, encoding="utf-8") as f:
         assessments = json.load(f)
+
+    # Load LLM-generated use-case descriptions if available
+    llm_descriptions = {}
+    desc_path = Path("llm_descriptions.json")
+    if desc_path.exists():
+        with open(desc_path, encoding="utf-8") as f:
+            llm_descriptions = json.load(f)
+        print(f"Loaded LLM descriptions for {len(llm_descriptions)} assessments.")
 
     print(f"Processing {len(assessments)} assessments...")
 
@@ -239,7 +251,7 @@ def main():
         a.setdefault("duration_minutes", None)
 
         # ── 5. Build the unified search_text for embedding ──
-        a["search_text"] = build_search_text(a)
+        a["search_text"] = build_search_text(a, llm_desc=llm_descriptions.get(a["name"], ""))
 
     # Save processed catalog
     with open(output_path, "w", encoding="utf-8") as f:

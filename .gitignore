@@ -3,7 +3,4 @@ __pycache__/
 *.pyc
 *.zip
 venv/
-faiss_index.bin
-index_metadata.json
 catalog.json
-catalog_processed.json
