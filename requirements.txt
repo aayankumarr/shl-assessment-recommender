@@ -16,15 +16,5 @@ sentence-transformers==5.5.0
 torch==2.12.0
 transformers==5.8.1
 
-# Scraping & parsing
-beautifulsoup4==4.14.5
-playwright==1.59.0
-pdfplumber==0.11.9
-requests==2.34.2
-
 # Utilities
 numpy==2.2.6
-
-# Notebook (dev)
-jupyter==1.1.1
-ipykernel==7.2.0
